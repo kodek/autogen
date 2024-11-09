@@ -15,15 +15,14 @@ from autogen_core.components.models import (
     UserMessage,
 )
 from autogen_core.components.tools import FunctionTool, Tool
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from .. import EVENT_LOGGER_NAME
 from ..base import Response
 from ..messages import (
+    AgentMessage,
     ChatMessage,
     HandoffMessage,
-    InnerMessage,
-    ResetMessage,
     TextMessage,
     ToolCallMessage,
     ToolCallResultMessage,
@@ -31,30 +30,6 @@ from ..messages import (
 from ._base_chat_agent import BaseChatAgent
 
 event_logger = logging.getLogger(EVENT_LOGGER_NAME)
-
-
-class ToolCallEvent(BaseModel):
-    """A tool call event."""
-
-    source: str
-    """The source of the event."""
-
-    tool_calls: List[FunctionCall]
-    """The tool call message."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-
-class ToolCallResultEvent(BaseModel):
-    """A tool call result event."""
-
-    source: str
-    """The source of the event."""
-
-    tool_call_results: List[FunctionExecutionResult]
-    """The tool call result message."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class Handoff(BaseModel):
@@ -242,16 +217,13 @@ class AssistantAgent(BaseChatAgent):
 
     async def on_messages_stream(
         self, messages: Sequence[ChatMessage], cancellation_token: CancellationToken
-    ) -> AsyncGenerator[InnerMessage | Response, None]:
+    ) -> AsyncGenerator[AgentMessage | Response, None]:
         # Add messages to the model context.
         for msg in messages:
-            if isinstance(msg, ResetMessage):
-                self._model_context.clear()
-            else:
-                self._model_context.append(UserMessage(content=msg.content, source=msg.source))
+            self._model_context.append(UserMessage(content=msg.content, source=msg.source))
 
         # Inner messages.
-        inner_messages: List[InnerMessage] = []
+        inner_messages: List[AgentMessage] = []
 
         # Generate an inference result based on the current model context.
         llm_messages = self._system_messages + self._model_context
@@ -264,19 +236,21 @@ class AssistantAgent(BaseChatAgent):
 
         # Run tool calls until the model produces a string response.
         while isinstance(result.content, list) and all(isinstance(item, FunctionCall) for item in result.content):
-            event_logger.debug(ToolCallEvent(tool_calls=result.content, source=self.name))
+            tool_call_msg = ToolCallMessage(content=result.content, source=self.name, models_usage=result.usage)
+            event_logger.debug(tool_call_msg)
             # Add the tool call message to the output.
-            inner_messages.append(ToolCallMessage(content=result.content, source=self.name, model_usage=result.usage))
-            yield ToolCallMessage(content=result.content, source=self.name, model_usage=result.usage)
+            inner_messages.append(tool_call_msg)
+            yield tool_call_msg
 
             # Execute the tool calls.
             results = await asyncio.gather(
                 *[self._execute_tool_call(call, cancellation_token) for call in result.content]
             )
-            event_logger.debug(ToolCallResultEvent(tool_call_results=results, source=self.name))
+            tool_call_result_msg = ToolCallResultMessage(content=results, source=self.name)
+            event_logger.debug(tool_call_result_msg)
             self._model_context.append(FunctionExecutionResultMessage(content=results))
-            inner_messages.append(ToolCallResultMessage(content=results, source=self.name))
-            yield ToolCallResultMessage(content=results, source=self.name)
+            inner_messages.append(tool_call_result_msg)
+            yield tool_call_result_msg
 
             # Detect handoff requests.
             handoffs: List[Handoff] = []
@@ -303,7 +277,7 @@ class AssistantAgent(BaseChatAgent):
 
         assert isinstance(result.content, str)
         yield Response(
-            chat_message=TextMessage(content=result.content, source=self.name, model_usage=result.usage),
+            chat_message=TextMessage(content=result.content, source=self.name, models_usage=result.usage),
             inner_messages=inner_messages,
         )
 
@@ -323,3 +297,7 @@ class AssistantAgent(BaseChatAgent):
             return FunctionExecutionResult(content=result_as_str, call_id=tool_call.id)
         except Exception as e:
             return FunctionExecutionResult(content=f"Error: {e}", call_id=tool_call.id)
+
+    async def reset(self, cancellation_token: CancellationToken) -> None:
+        """Reset the assistant agent to its initialization state."""
+        self._model_context.clear()

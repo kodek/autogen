@@ -101,7 +101,7 @@ We look forward to your contributions!
 First install the packages:
 
 ```bash
-pip install 'autogen-agentchat==0.4.0.dev3' 'autogen-ext[docker]==0.4.0.dev3'
+pip install 'autogen-agentchat==0.4.0.dev4' 'autogen-ext[docker]==0.4.0.dev4'
 ```
 
 The following code uses code execution, you need to have [Docker installed](https://docs.docker.com/engine/install/)
@@ -109,11 +109,11 @@ and running on your machine.
 
 ```python
 import asyncio
-from autogen_ext.code_executor.docker_executor import DockerCommandLineCodeExecutor
+from autogen_ext.code_executors import DockerCommandLineCodeExecutor
 from autogen_ext.models import OpenAIChatCompletionClient
 from autogen_agentchat.agents import CodeExecutorAgent, CodingAssistantAgent
 from autogen_agentchat.teams import RoundRobinGroupChat
-from autogen_agentchat.task import TextMentionTermination
+from autogen_agentchat.task import TextMentionTermination, Console
 
 async def main() -> None:
     async with DockerCommandLineCodeExecutor(work_dir="coding") as code_executor:
@@ -124,10 +124,9 @@ async def main() -> None:
         termination = TextMentionTermination("TERMINATE")
         group_chat = RoundRobinGroupChat([coding_assistant_agent, code_executor_agent], termination_condition=termination)
         stream = group_chat.run_stream(
-            "Create a plot of NVDIA and TSLA stock returns YTD from 2024-01-01 and save it to 'nvidia_tesla_2024_ytd.png'."
+            task="Create a plot of NVDIA and TSLA stock returns YTD from 2024-01-01 and save it to 'nvidia_tesla_2024_ytd.png'."
         )
-        async for message in stream:
-            print(message)
+        await Console(stream)
 
 asyncio.run(main())
 ```
