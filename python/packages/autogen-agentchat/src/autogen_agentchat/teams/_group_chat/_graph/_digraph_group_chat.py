@@ -112,7 +112,8 @@ class DiGraph(BaseModel):
         parents: Dict[str, List[str]] = {node: [] for node in self.nodes}
         for node in self.nodes.values():
             for edge in node.edges:
-                parents[edge.target].append(node.name)
+                if edge.target != node.name:
+                    parents[edge.target].append(node.name)
         return parents
 
     def get_start_nodes(self) -> Set[str]:
@@ -198,8 +199,10 @@ class DiGraph(BaseModel):
         # Outgoing edge condition validation (per node)
         for node in self.nodes.values():
             # Check that if a node has an outgoing conditional edge, then all outgoing edges are conditional
-            has_condition = any(edge.condition is not None for edge in node.edges)
-            has_unconditioned = any(edge.condition is None for edge in node.edges)
+            has_condition = any(
+                edge.condition is not None or edge.condition_function is not None for edge in node.edges
+            )
+            has_unconditioned = any(edge.condition is None and edge.condition_function is None for edge in node.edges)
             if has_condition and has_unconditioned:
                 raise ValueError(f"Node '{node.name}' has a mix of conditional and unconditional edges.")
 
